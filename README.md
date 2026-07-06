@@ -1,141 +1,56 @@
-# PsBangHistory
+# PsPrompt
 
-Bash-style bang-history expansion for PowerShell, using `~` instead of `!` (since `!` isn't available as a bare sigil in PowerShell).
+A PowerShell profile built around a custom prompt that stays useful instead of decorative: cross-session command numbering, relative path display, and inline git branch/status coloring — plus a small set of supporting utilities (colorized `ls`, git shortcuts, cross-session history).
 
-## Syntax
+## What's in the box
 
-| Token          | Meaning                                      | Bash equivalent |
-|----------------|-----------------------------------------------|------------------|
-| `~~`           | last command                                  | `!!`             |
-| `~$`           | last word of last command                     | `!$`             |
-| `~-N`          | Nth-previous command                          | `!-N`            |
-| `~-N:$`        | last word of Nth-previous command             | `!-N:$`          |
-| `~-N:^`        | first arg of Nth-previous command             | `!-N:^`          |
-| `~-N:*`        | all args of Nth-previous command              | `!-N:*`          |
-| `~-N:K`        | word K (0 = command name) of Nth-previous cmd | `!-N:K`          |
-| `~-N:A-B`      | word range A..B of Nth-previous command       | `!-N:A-B`        |
-| `~N`           | history event N by absolute Id                | `!N`             |
-| `~N:$` etc     | same selectors, applied to event N            | `!N:$` etc       |
-| `~[text]`      | most recent command containing `text` anywhere | `!?text?`       |
-| `~[text]:$` etc | same selectors, applied to the matched command | `!text:$` etc   |
-| `~word`        | most recent command *starting with* `word`   | `!word`          |
-| `~word:$` etc  | same selectors, applied to the prefix-matched command | `!word:$` etc |
-| `~-N:K*`       | words K..end of Nth-previous command          | `!-N:K*`         |
-| `~~:gs/old/new/` | last command, every `old` replaced with `new` | `!!:gs/old/new/` |
-| `^old^new^`    | last command, first `old` replaced with `new` | `^old^new^`      |
+`Microsoft.PowerShell_profile.ps1` — drop-in replacement for your `$PROFILE`.
+
+### The prompt
+
+```
+[7853] ~/local/repos/PSPrompt (master) [22:05:41]
+λ
+```
+
+- **`[7853]`** — a command counter that persists across every session, not just the current one. Most PowerShell prompts either omit a counter or reset it to 1 on every new shell; this one reads PSReadLine's saved history file so the number keeps climbing for as long as you've been using the machine.
+- **`~/local/repos/PSPrompt`** — current path, shown relative to `$HOME` when inside it.
+- **`(master)`** — current git branch, shown only inside a repo. Green if clean, red if there are uncommitted changes (`git status --porcelain`).
+- **`[22:05:41]`** — wall clock.
+- **`λ`** — prompt character on its own line, so the command you type starts at column 0 regardless of how long the rest of the prompt got.
+
+The cross-session counter is cached rather than re-read on every keystroke: it reads the history file's line count once at shell startup, then increments in memory for the rest of the session. On a history file with several thousand entries this is the difference between a one-time cost at launch and a full file re-parse before every single prompt render.
+
+### Supporting utilities
+
+| Command | Does |
+|---|---|
+| `ls` | Colorized directory listing — blue for folders, colored by extension for files (executables, config/data formats, build artifacts, source code, project files) |
+| `l` | Alias for `ls` |
+| `h` | Prints command history, cross-session, zero-based numbering |
+| `gs` | `git status -s` |
+| `gacp "message"` | `git add -A`, `git commit -m "message"`, `git push` — skips the push if the commit failed |
+| `gp` | `git push` |
+| `gll` | `git log --oneline --graph --decorate -20` |
+| `which <name>` | Resolves a command the way bash's `which` does — shows type, source, and definition, since `Get-Command` covers aliases and functions as well as executables |
+| `rmrf` | `Remove-Item -Recurse -Force`, for muscle memory coming from `rm -rf` |
+
+A `trap` on `CommandNotFoundException` also replaces PowerShell's default error block for typos with a single clean line: `<command> not found`.
 
 ## Install
 
 ```powershell
-. "C:\path\to\PsBangHistory\BangHistory.ps1"
+cp Microsoft.PowerShell_profile.ps1 $PROFILE
+. $PROFILE
 ```
 
-Or add that line to `$PROFILE` to load on every session.
+Check which profile path applies to your shell first if you run both Windows PowerShell 5.1 and PowerShell 7+ — they use different `$PROFILE` locations, and this file needs to be in both if you switch between them.
 
-### Extracting the release archive on Windows
+## Requirements
 
-`Expand-Archive` only handles `.zip` — it will not open a `.tar.gz`. Use Windows' built-in `tar.exe` (bsdtar, shipped since Windows 10 1803) instead:
-
-```powershell
-tar xzf PsBangHistory.tar.gz -C .
-```
-
-Note this `tar.exe` doesn't support GNU-style `--overwrite`; it overwrites existing files by default, so just omit the flag.
-
-## Testing
-
-```powershell
-Install-Module -Name Pester -MinimumVersion 5.0.0 -Scope CurrentUser
-Import-Module Pester -MinimumVersion 5.0.0 -Force
-Invoke-Pester .\Tests -Output Detailed
-```
-
-Always invoke through `Invoke-Pester .\Tests`, not by running the test file directly — Windows ships an old Pester 3.4.0 under `Program Files` that predates the syntax used here, and direct invocation isn't the intended entry point in Pester 5 regardless.
-
-## Help
-
-Two ways to get the reference table without leaving the terminal:
-
-```powershell
-Show-BangHistoryHelp        # quick cheat-sheet table, printed directly
-Get-Help Expand-BangHistory -Full   # full comment-based help with examples
-```
-
-`Show-BangHistoryHelp` is a normal function call — type it exactly as shown, not as a `~` token, or it'll be treated as a history search instead of a help request.
-
-## Behaviour
-
-Pressing Enter on a line containing a `~` token expands it into the buffer and stops — it does not execute. Press Enter again on the now-expanded (token-free) line to run it. This is a deliberate preview/confirm step, not a bug.
-
-**If an expansion resolves to the wrong thing**, press **Ctrl+Z** (PowerShell's default Undo binding) to revert the buffer back to exactly what you typed, fix the token, and try again.
-
-Operates on PSReadLine's persisted history file when one exists — that covers commands from every prior session, not just this one, since PSReadLine appends to that file live as you type. Falls back to `Get-History` (session-only) if no persisted file is configured or found. Check your file with:
-
-```powershell
-(Get-PSReadLineOption).HistorySavePath
-```
-
-Bash's `!#` (the not-yet-submitted current line) has no equivalent here — there's no reliable hook into unsubmitted buffer text outside the Enter handler itself.
-
-`gs/old/new/` — neither `old` nor `new` may contain a literal `/`, since `/` is the field delimiter.
-
-## Demos
-
-**Rerun the last command**
-```powershell
-PS> docker build -t myapp .
-PS> ~~
-```
-
-**Reuse an argument across a different command**
-```powershell
-PS> vim server.config.json
-PS> git add ~$
-# expands to: git add server.config.json
-```
-
-**Search history and extract an argument**
-```powershell
-PS> docker run -d --name api-server -p 8080:80 nginx
-PS> ...ten commands later...
-PS> docker logs ~[api-server]:2
-```
-
-**The safety net — preview before anything destructive runs**
-```powershell
-PS> rm -Recurse ~-5:*
-# buffer shows the fully expanded path before anything executes
-# e.g. rm -Recurse -Force C:\builds\output\*
-# only runs on the second Enter
-```
-
-**Absolute recall by history id**
-```powershell
-PS> Get-BangHistoryBuffer | Select-Object Id, CommandLine | Select-Object -Last 20
-PS> ~142
-```
-Note: this `Id` is line-position in the persisted history file, not the `Id` shown by `Get-History` — the two numbering schemes differ once `~N` is reading cross-session history. Always check ids via `Get-BangHistoryBuffer`, not `Get-History`.
-
-**Quick fix a typo/detail and re-run without retyping the whole command**
-```powershell
-PS> git push origin mian
-PS> ^mian^main^
-# expands to: git push origin main
-```
-
-**Prefix match — bash's actual !string behavior**
-```powershell
-PS> git commit -m "fix bug"
-PS> ~git
-# most recent command starting with "git" — not just containing it anywhere
-```
-
-**Global substitution across an entire command**
-```powershell
-PS> docker build -t myapp:v1.2.3 .
-PS> ~~:gs/v1.2.3/v1.2.4/
-# expands to: docker build -t myapp:v1.2.4 .
-```
+- PSReadLine (ships with Windows PowerShell 5.1+ and PowerShell 7+)
+- Git, for the branch/status segment and the `g*` shortcuts (silently omitted outside a repo)
+- [PsBangHistory](https://github.com/cschladetsch/PsBangHistory) — the prompt's cross-session counter reads `Get-BangHistoryBuffer`, defined there. Update the dot-source path near the top of the profile to wherever you've cloned it.
 
 ## License
 
