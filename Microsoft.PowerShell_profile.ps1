@@ -18,7 +18,7 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
 # PSReadLine
 # ============================================================
 
-Set-PSReadLineOption -MaximumHistoryCount 10000
+Set-PSReadLineOption -MaximumHistoryCount 1000
 Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
 Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
@@ -187,3 +187,5 @@ function which {
     "$HOME\OneDrive\Documents\WindowsPowerShell\Modules;$env:PSModulePath",
     'User'
 )
+Set-Location "$HOME\local\repos"
+
