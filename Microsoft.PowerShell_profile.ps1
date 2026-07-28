@@ -1,57 +1,189 @@
-# PsPrompt
+# ============================================================
+# Startup
+# ============================================================
 
-A PowerShell profile built around a custom prompt that stays useful instead of decorative: cross-session command numbering, relative path display, and inline git branch/status coloring â€” plus a small set of supporting utilities (colorized `ls`, git shortcuts, cross-session history).
+Clear-Host
 
-## What's in the box
+# CommandNotFoundAction is the reliable hook here — a `trap` doesn't work
+# for this because each line typed at the interactive prompt is its own
+# top-level invocation, and a trap set during profile execution (a separate,
+# earlier invocation) doesn't carry over to catch errors in later ones.
+$ExecutionContext.InvokeCommand.CommandNotFoundAction = {
+    param($CommandName, $EventArgs)
+    Write-Host "$CommandName not found" -ForegroundColor Red
+    $EventArgs.StopSearch = $true
+}
 
-`Microsoft.PowerShell_profile.ps1` â€” drop-in replacement for your `$PROFILE`.
+# ============================================================
+# PSReadLine
+# ============================================================
 
-### The prompt
+Set-PSReadLineOption -MaximumHistoryCount 10000
+Set-PSReadLineOption -HistorySearchCursorMovesToEnd
+Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
+Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
 
-```
-[7853] ~/local/repos/PSPrompt (master) [22:05:41]
-Î»
-```
+$HistoryFilePath = Join-Path ([Environment]::GetFolderPath('UserProfile')) .ps_history
+Set-PSReadLineOption -HistorySavePath $HistoryFilePath
 
-- **`[7853]`** â€” a command counter that persists across every session, not just the current one. Most PowerShell prompts either omit a counter or reset it to 1 on every new shell; this one reads PSReadLine's saved history file so the number keeps climbing for as long as you've been using the machine.
-- **`~/local/repos/PSPrompt`** â€” current path, shown relative to `$HOME` when inside it.
-- **`(master)`** â€” current git branch, shown only inside a repo. Green if clean, red if there are uncommitted changes (`git status --porcelain`).
-- **`[22:05:41]`** â€” wall clock.
-- **`Î»`** â€” prompt character on its own line, so the command you type starts at column 0 regardless of how long the rest of the prompt got.
+# ============================================================
+# ~ bang-history expansion (must load before `prompt`, which
+# depends on Get-BangHistoryBuffer)
+# ============================================================
 
-The cross-session counter is cached rather than re-read on every keystroke: it reads the history file's line count once at shell startup, then increments in memory for the rest of the session. On a history file with several thousand entries this is the difference between a one-time cost at launch and a full file re-parse before every single prompt render.
+. (Join-Path $HOME 'local\repos\Ps1BangHistory\BangHistory.ps1')
 
-### Supporting utilities
+# ============================================================
+# Prompt
+# ============================================================
 
-| Command | Does |
-|---|---|
-| `ls` | Colorized directory listing â€” blue for folders, colored by extension for files (executables, config/data formats, build artifacts, source code, project files) |
-| `l` | Alias for `ls` |
-| `h` | Prints command history, cross-session, zero-based numbering |
-| `gs` | `git status -s` |
-| `gacp "message"` | `git add -A`, `git commit -m "message"`, `git push` â€” skips the push if the commit failed |
-| `gp` | `git push` |
-| `gll` | `git log --oneline --graph --decorate -20` |
-| `which <name>` | Resolves a command the way bash's `which` does â€” shows type, source, and definition, since `Get-Command` covers aliases and functions as well as executables |
-| `rmrf` | `Remove-Item -Recurse -Force`, for muscle memory coming from `rm -rf` |
+# Cache the cross-session history count so `prompt` (which fires after
+# every command) doesn't re-parse the entire persisted history file on
+# every render — only reads it once, then increments in memory.
+$script:BangHistoryCachedCount = $null
 
-`$ExecutionContext.InvokeCommand.CommandNotFoundAction` is also set to a handler that replaces PowerShell's default error block for typos with a single clean line: `<command> not found`. (An earlier version of this used `trap`, which doesn't reliably work here â€” each line typed at the interactive prompt is its own separate top-level invocation, and a trap set during profile execution doesn't carry over to catch errors typed afterward.)
+function prompt {
+    if ($null -eq $script:BangHistoryCachedCount) {
+        $script:BangHistoryCachedCount = (Get-BangHistoryBuffer).Count
+    }
+    else {
+        $script:BangHistoryCachedCount++
+    }
+    $id = $script:BangHistoryCachedCount
 
-## Install
+    $currentPath = $PWD.Path
+    $homePath = $HOME
+    $lambda = [System.Char]::ConvertFromUtf32(0x03BB)
 
-```powershell
-cp Microsoft.PowerShell_profile.ps1 $PROFILE
-. $PROFILE
-```
+    if ($currentPath.StartsWith($homePath)) {
+        $relativePath = $currentPath.Substring($homePath.Length)
+        if ($relativePath.StartsWith('\') -or $relativePath.StartsWith('/')) {
+            $relativePath = $relativePath.Substring(1)
+        }
+        $loc = if ([string]::IsNullOrEmpty($relativePath)) { "~" } else { "~/$relativePath" -replace '\\', '/' }
+    }
+    else {
+        $loc = Split-Path -Leaf $PWD
+    }
 
-Check which profile path applies to your shell first if you run both Windows PowerShell 5.1 and PowerShell 7+ â€” they use different `$PROFILE` locations, and this file needs to be in both if you switch between them.
+    $time = Get-Date -Format 'HH:mm:ss'
+    $gitBranch = git branch --show-current 2>$null
+    $gitStatus = git status --porcelain 2>$null
 
-## Requirements
+    Write-Host "`n[$id]" -NoNewline -ForegroundColor Cyan
+    Write-Host " $loc" -NoNewline -ForegroundColor Yellow
+    if ($gitBranch) {
+        $branchColor = if ($gitStatus) { "Red" } else { "Green" }
+        Write-Host " ($gitBranch)" -NoNewline -ForegroundColor $branchColor
+    }
+    Write-Host " [$time]" -NoNewline -ForegroundColor DarkGray
+    Write-Host "`n$lambda" -NoNewline -ForegroundColor Green
+    " "
+}
 
-- PSReadLine (ships with Windows PowerShell 5.1+ and PowerShell 7+)
-- Git, for the branch/status segment and the `g*` shortcuts (silently omitted outside a repo)
-- [PsBangHistory](https://github.com/cschladetsch/PsBangHistory) â€” the prompt's cross-session counter reads `Get-BangHistoryBuffer`, defined there. Update the dot-source path near the top of the profile to wherever you've cloned it.
+# ============================================================
+# File listing (ls / l)
+# ============================================================
 
-## License
+function Format-FileSize {
+    param ([long]$Size)
+    if ($Size -gt 1GB) { return "{0:N2} GB" -f ($Size / 1GB) }
+    if ($Size -gt 1MB) { return "{0:N2} MB" -f ($Size / 1MB) }
+    if ($Size -gt 1KB) { return "{0:N2} KB" -f ($Size / 1KB) }
+    return "$Size B"
+}
 
-MIT
+Remove-Item Alias:ls -Force -ErrorAction SilentlyContinue
+function ls {
+    $originalLocation = Get-Location
+    Get-ChildItem | ForEach-Object {
+        $color = if ($_.PSIsContainer) {
+            "Blue"
+        }
+        else {
+            switch -Regex ($_.Name.ToLower()) {
+                '\.(exe|bat|cmd|ps1)$'              { "Green" }
+                '\.(txt|md|json|yml|yaml|xml|config)$' { "Yellow" }
+                '\.(dll|pdb|obj|bin)$'              { "DarkGray" }
+                '\.(cs|fs|cpp|h|hpp)$'               { "Magenta" }
+                '\.(sln|csproj|fsproj)$'            { "Cyan" }
+                '^\.'                                { "DarkCyan" }
+                default                              { "White" }
+            }
+        }
+
+        $timeStr = $_.LastWriteTime.ToString("MM/dd/yyyy HH:mm")
+        $lengthStr = if ($_.PSIsContainer) { "".PadLeft(10) } else { (Format-FileSize $_.Length).PadLeft(10) }
+
+        Write-Host ("{0,-7}" -f $_.Mode) -NoNewline
+        Write-Host ("{0,-16}" -f $timeStr) -NoNewline
+        Write-Host ("{0,10}  " -f $lengthStr) -NoNewline
+        Write-Host $_.Name -ForegroundColor $color
+    }
+    Set-Location $originalLocation
+}
+
+function List-Files { ls }   # kept as an explicit-name alternative to `ls`
+
+Remove-Item Alias:l  -Force -ErrorAction SilentlyContinue
+Set-Alias   l  List-Files
+Set-Alias   ll ls
+Set-Alias   vi nvim
+Set-Alias   grep rg
+
+# ============================================================
+# History (h) — cross-session, zero-based, via Get-BangHistoryBuffer.
+# ============================================================
+
+function MyHistory {
+    Get-BangHistoryBuffer | ForEach-Object {
+        Write-Host ("[{0}] " -f $_.Id) -ForegroundColor Yellow -NoNewline
+        Write-Host $_.CommandLine -ForegroundColor White
+    }
+}
+
+Remove-Item Alias:h -Force -ErrorAction SilentlyContinue
+Set-Alias h MyHistory
+
+# ============================================================
+# Git shortcuts
+# ============================================================
+
+function gs { git status -s }
+
+function gacp {
+    param([Parameter(Mandatory, Position = 0)][string]$Message)
+    git add -A
+    git commit -m $Message
+    if ($LASTEXITCODE -eq 0) { git push }
+}
+
+function gp  { git push }
+function gll { git log --oneline --graph --decorate -20 }
+
+# ============================================================
+# Misc utilities
+# ============================================================
+
+function rmrf {
+    Remove-Item -Recurse -Force $args
+}
+
+function cdr {
+    cd ~\local\repos
+}
+
+function which {
+    param([string]$Name)
+    Get-Command $Name | Select-Object Name, CommandType, Source, Definition
+}
+
+# ============================================================
+# Environment
+# ============================================================
+
+[Environment]::SetEnvironmentVariable(
+    'PSModulePath',
+    "$HOME\OneDrive\Documents\WindowsPowerShell\Modules;$env:PSModulePath",
+    'User'
+)
